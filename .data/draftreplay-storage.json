@@ -1,0 +1,79 @@
+{
+  "docs": [
+    {
+      "id": "GslLLx5HfVCMGSITUZJxQu2c",
+      "title": "Untitled Essay",
+      "student_id": "STU-2026-21",
+      "studentClass": "",
+      "created_at": 1793438379813,
+      "last_seq": 0,
+      "version": 2,
+      "key_hash": "bec5335e603a6ebe014177b8c51e9a293703178c72ad98b90e8e3a44e7bb1dc5",
+      "declaration": {
+        "level": "ideas",
+        "note": "",
+        "declaredAt": 1793438382763
+      },
+      "grade": null
+    },
+    {
+      "id": "demo-hero-festival-doc-v7",
+      "title": "My Favourite Festival (Class 8 English)",
+      "student_id": "STU-2026-2387",
+      "studentClass": "",
+      "created_at": 1793440700547,
+      "last_seq": 0,
+      "version": 1,
+      "key_hash": "b4c50ef1bd121cedf19c68b52c7fd2a3c14e1f5587840eedbe7daf04f4ceea66",
+      "declaration": null,
+      "grade": null
+    },
+    {
+      "id": "pJcvZ-IwFf35lK1RQUAXEU9d",
+      "title": "Untitled Essay",
+      "student_id": "STU-2026-6932",
+      "studentClass": "",
+      "created_at": 1793440703771,
+      "last_seq": 0,
+      "version": 1,
+      "key_hash": "4f0aa6efd69f736e826b80abbbd8094eb418d7d2fe6fa2c1e5e0cf800cb143c9",
+      "declaration": null,
+      "grade": null
+    },
+    {
+      "id": "rmjPpBnVLuYz4BxAeWB2jNxB",
+      "title": "Untitled Essay",
+      "student_id": "STU-2026-7742",
+      "studentClass": "",
+      "created_at": 1793440797730,
+      "last_seq": 0,
+      "version": 1,
+      "key_hash": "efd7f505d5602256a513ca66cfb4e2245dc0cd85a2af818fc4cbd162178eb8fc",
+      "declaration": null,
+      "grade": null
+    },
+    {
+      "id": "KMapYDrVOuAO4Xp6iwH1OFuz",
+      "title": "Untitled Essay",
+      "student_id": "STU-2026-2919",
+      "studentClass": "",
+      "created_at": 1793441648197,
+      "last_seq": 0,
+      "version": 1,
+      "key_hash": "933cb067cc3caa4f0db6cb32dcd49ad1f628415b785908e05db4bbd79b56ed49",
+      "declaration": null,
+      "grade": null,
+      "reviewStatus": "under_review",
+      "reviewStatusUpdatedAt": 1793441694773,
+      "teacherComments": "Reviewing replay and writing rhythm"
+    }
+  ],
+  "snapshots": {
+    "GslLLx5HfVCMGSITUZJxQu2c": [],
+    "demo-hero-festival-doc-v7": [],
+    "pJcvZ-IwFf35lK1RQUAXEU9d": [],
+    "rmjPpBnVLuYz4BxAeWB2jNxB": [],
+    "KMapYDrVOuAO4Xp6iwH1OFuz": []
+  },
+  "shares": []
+}

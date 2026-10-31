@@ -1,0 +1,8 @@
+{
+  "name": "DraftReplay",
+  "description": "A writing-process transparency tool recording how a document grows and letting reviewers replay it beside the student's AI-use declaration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

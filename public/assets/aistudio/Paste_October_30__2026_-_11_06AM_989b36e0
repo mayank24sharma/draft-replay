@@ -1,0 +1,399 @@
+# BT-13 DraftReplay — v7.3 BUILD SPEC (FINAL)
+BT-13 Writing Process Replay · Level 3 Advanced · BIOS V2 School Buildathon · TIET Patiala
+
+ROLE: Build "DraftReplay" — a writing-process transparency tool. It is NOT a plagiarism
+checker and NOT an AI detector. It records how a document grows and lets a reviewer
+replay it, beside the student's own AI-use declaration.
+
+STACK (fixed):
+- Next.js (App Router) + TypeScript + Tailwind CSS
+- Next.js route handlers for all API access
+- Supabase Postgres (free tier) via node-postgres (pg) Pool. CONNECTION STRING = the
+  SESSION pooler (IPv4-capable). Direct database hosts may be IPv6-only and refused on
+  venue networks; the transaction-mode pooler (port 6543) adds pooler-mode behaviour we
+  refuse to debug on build day. Verify with a real authenticated append at 08:45 on
+  31 Oct, through this exact string.
+- Pool sizing: new Pool({ connectionString, max: 2, idleTimeoutMillis: 10_000 }) —
+  a small cap; serverless auto-scaling must not exhaust the database connection limit.
+- Local cache in IndexedDB for unsent snapshots and the write key
+- Dark, clean, warm UI. Big fonts. One accent color (emerald). Simple English copy.
+
+HARD RULES (never violate):
+1. NEVER capture keystrokes. Snapshots only: the full text at moments of change.
+2. Paste is labelled ONLY from real paste signals (inputType "insertFromPaste" and/or
+   the paste event's clipboardData). Autocorrect, voice input, suggestions, IME
+   composition, and drag-and-drop are NOT pastes.
+3. No personal data. No names, emails, accounts, logins. Document IDs: 128+ bits random.
+   No IP, user agent or device ID stored by the app.
+4. No scores, verdicts, "AI %" or any label that judges a person. The declaration sits
+   beside the evidence as an equal.
+5. Every seeded/demo document shows a persistent "FICTIONAL DEMO DOCUMENT" label.
+6. The SERVER enforces security, not the UI. RLS on every table (blocks anonymous
+   database access — see AUTHORISATION MODEL); the DATABASE CONNECTION STRING lives
+   only in server env; wrong/missing keys rejected server-side (401/403).
+7. Local cache near ~4 MB -> visible warning. NEVER drop snapshots silently.
+8. The write key never appears in any URL, query string, exported bundle, or server log.
+
+FIXED DECISIONS:
+D1  Backend version storage is REQUIRED ("a backend that stores versions"). Built before
+    the 13:00 checkpoint. If it fails, ship the local fallback AND disclose exactly what
+    is not server-stored — never present the fallback as meeting the spec.
+D2  One duplicate rule: never save a snapshot whose text equals the last saved text —
+    regardless of event type.
+D3  Snapshot ordering: client-generated snapshotId, SERVER-assigned seq, gap-free,
+    idempotent retries.
+D4  Paste counts come from the clipboard (exact). Diff-derived counts are ESTIMATES and
+    are labelled as such. Counts use JavaScript UTF-16 code units (.length).
+D5  Offline: editing + ordered queued sync is REQUIRED. Offline RELOAD (service worker)
+    is STRETCH and must not be claimed unless tested. These are different capabilities.
+D6  Two tabs: single-author MVP; a second tab shows "This document is open elsewhere".
+    No merge. Stated as a limit.
+D7  No hash chains. No signatures. Honesty labels carry the trust story.
+D8  Classification is BEST-EFFORT; saved states are truth. Budget <= 45 minutes total on
+    the classifier. Reliable saved states matter more than perfect labels.
+D9  Drag-and-drop text (insertFromDrop) is recorded as TYPING (diff-estimate). No block
+    card for drops. We may miss that block boundary; we never falsely add one.
+
+DATA MODEL:
+Document {
+  docId: string        // 22+ chars base64url, client-generated, 128+ bits
+  title: string        // content, not identity
+  createdAt: timestamp
+  lastSeq: number      // server-managed
+  version: number      // starts 1; +1 after a declaration is saved
+  keyHash: string      // SHA-256 of the write key (server never sees the plain key)
+  declaration: { level: "none"|"ideas"|"drafted"|"wrote-parts", note: string(<=140), declaredAt }
+}
+Snapshot {
+  snapshotId: string   // client UUID (crypto.randomUUID) — idempotency key
+  seq: number          // SERVER-assigned, gap-free per document
+  t: timestamp         // SERVER time (authoritative)
+  clientT: timestamp   // display only; source of all time/span display
+  text: string         // FULL text at this moment
+  eventType: "paste" | "large_delete" | "undo" | "pause"
+  inserted: number     // UTF-16 code units; exact for paste, else estimate
+  deleted: number      // estimate unless measured at selection level
+  countSource: "event" | "diff-estimate"
+}
+WriteKey: 32 random bytes (crypto.getRandomValues) base64url, generated in the BROWSER
+at document creation. Server stores only its SHA-256 hash. Sent per write in an
+Authorization header over HTTPS. Stored in IndexedDB only.
+
+Supabase tables:
+docs(id, title, created_at, last_seq, version, key_hash, declaration jsonb)
+snapshots(doc_id, snapshot_id, seq, t, client_t, text, event_type, inserted, deleted,
+          count_source)  UNIQUE (doc_id, snapshot_id)
+shares(token_hash, doc_id, created_at, revoked_at)
+
+CAPTURE LOGIC:
+Two diff baselines:
+- lastInputText: updated every input event; classifies the single action just performed.
+- lastSnapshotText: updated only when a snapshot is saved; used for replay + dedupe.
+
+Per input event:
+1. before = lastInputText; after = editor.value; compute common prefix p and suffix s
+   (p + s <= min(len(before), len(after))); inserted = len(after)-p-s;
+   deleted = len(before)-p-s; lastInputText = after.
+2. Paste path (event-first): if inputType starts with "insertFromPaste" -> eventType
+   "paste"; inserted = clipboard text length from the paste event (countSource "event")
+   when a non-empty text/plain clipboard value exists, else diff (countSource
+   "diff-estimate"). Snapshot IMMEDIATELY.
+3. Undo path: inputType "historyUndo"/"historyRedo" -> eventType "undo". Snapshot
+   IMMEDIATELY. Never label an undo as a deletion or a rewrite.
+4. Large delete / replace path: deleted > 40 -> eventType "large_delete". Snapshot
+   IMMEDIATELY. (Select-and-type lands here with both counts recorded.)
+5. insertFromDrop (drag-and-drop): recorded as TYPING (diff-estimate). No block card.
+6. Otherwise -> "typing": no immediate snapshot; starts/refreshes the 2 s pause timer.
+7. Pause: 2 s with no input -> snapshot (eventType "pause"). Any immediate snapshot
+   resets the pause timer.
+DEDUPE (D2): before saving ANY snapshot, if text === lastSnapshotText -> skip and drop.
+Initialise lastSnapshotText = "".
+Every snapshot stores the FULL text.
+Ambiguity guard (D8): repeated characters, composition, exotic input -> save with the
+best-guess label and countSource "diff-estimate". Never block saving to perfect a label.
+
+CAPTURE TESTS (record pass/fail):
+T1  Type 3 sentences, wait 5 s -> one "pause" snapshot
+T2  Type without pausing, delete a 12-char word -> "typing"; NO large_delete; snapshot
+    only on pause
+T3  Delete 60 chars in one action -> "large_delete", deleted = 60 (not cumulative)
+T4  Paste over a selection (pasted text overlaps surrounding chars) -> "paste";
+    inserted = clipboard length (exact); snapshot saved even if diff math is odd
+T5  Undo after a large delete -> "undo" snapshot; no duplicate row (texts differ -> both)
+T6  Pause, then pause again with no change -> one snapshot only (D2)
+T7  IME composition / autocorrect / voice input -> "typing", NEVER "paste"
+T7b Drag-and-drop text -> "typing"; no block card; counts marked diff-estimate
+
+API CONTRACT (all size-validated, all authorization server-side):
+POST   /api/docs                 create {title} + browser write key (server receives the
+                                 HASH only) -> {docId}
+POST   /api/docs/:id/snapshots   append snapshot; auth: Authorization header (write key)
+POST   /api/docs/:id/declaration store declaration; version +1; same auth
+GET    /api/docs/:id             read: write key (Authorization header only — NEVER in a
+                                 query string) OR valid reviewer token
+GET    /api/docs/:id/meta        SAME auth as GET /api/docs/:id — write key OR valid
+                                 reviewer token (?token=..., reviewer links only). Each
+                                 route verifies the key/token belongs to THAT document
+                                 id. Returns metadata for ALL snapshots (seq, t,
+                                 eventType, counts) PLUS captureSpanMs, captureStartMs,
+                                 captureEndMs (derived SERVER-side from stored clientT)
+                                 — the reviewer screen never receives raw clientT
+GET    /api/docs/:id/text?from=  SAME auth as above (write key OR valid reviewer token).
+                                 Snapshot text chunk, 50 at a time, oldest first,
+                                 prefetch the next chunk before the scrubber reaches it
+POST   /api/docs/:id/share       create share token -> {shareUrl}
+POST   /api/docs/:id/revoke      revoke a share token
+DELETE /api/docs/:id             delete doc + versions (write key)
+
+- The reviewer token is accepted ONLY by the three GET routes. No other route accepts
+  it. The write key never travels in a query string. /meta and /text MUST accept the
+  reviewer token — the reviewer screen reads the span from /meta and the text from /text.
+- Export is CLIENT-SIDE, built from the local cache. There is no server export route
+  and none shall be built.
+
+APPEND RULES (normative — these are part of the spec, not suggestions):
+a) Authenticate the write key and validate the payload BEFORE touching the pool.
+   A rejected request must never take the docs row lock.
+b) The append runs as ONE transaction: UPDATE (allocate seq) + INSERT. That transaction
+   is what keeps seq gap-free.
+c) The INSERT is a PLAIN insert. NEVER use ON CONFLICT DO NOTHING — a swallowed conflict
+   commits the seq increment and creates a permanent gap.
+d) On unique violation (SQLSTATE 23505): the transaction aborts and the increment rolls
+   back with it. Catch it, ROLLBACK, SELECT the existing row, return it with 200.
+e) Mechanism (i) only: node-postgres (pg) Pool, session-pooler connection, the code
+   pattern in the reference block. Do NOT wrap the append in a PL/pgSQL function
+   (COMMIT is invalid inside a function body). Do NOT mix styles.
+f) Idempotency: same snapshotId -> return the stored {seq, t}, insert nothing. A
+   timeout-then-retry never creates a second version.
+g) ONE checked-out client for the ENTIRE transaction: pool.connect() -> BEGIN -> ... ->
+   COMMIT/ROLLBACK -> release() in a finally block. NEVER run the statements through
+   pool.query() separately — each call can land on a DIFFERENT pool connection and split
+   the transaction, which produces a permanent seq gap and fails T9b.
+h) CONNECTION STRING = Supabase SESSION pooler (IPv4-capable). Direct database hosts
+   may be IPv6-only and refused on venue networks; the transaction-mode pooler (6543)
+   adds pooler-mode behaviour we refuse to debug on build day. Verify with a real
+   authenticated append at 08:45 on 31 Oct, through this exact string.
+
+AUTHORISATION MODEL (read this twice):
+Our server connects to Postgres as the TABLE OWNER, so RLS does not apply to our own
+queries — the write-key check in the route handler IS the guard. RLS is enabled on
+every table and blocks direct anonymous access to the database (T16, via the anon REST
+key). Never rely on RLS to protect a route; always check the key or token in the handler.
+
+ORDERING AND RETRIES:
+- Client generates snapshotId (UUID) at capture; never changes across retries.
+- Server assigns seq, gap-free, via APPEND RULES.
+- Response returns {seq, t}; the client marks the snapshot Synced.
+- Client queue (IndexedDB) sends pending snapshots in capture order; server seq is
+  authoritative. UI shows "Synced / Pending: N" per document. Never silent.
+
+LIMITS (server-enforced): snapshot text <= 32 KB; <= 2,000 snapshots/doc; body <= 1 MB.
+Rate limit: per-document and per-write-key — the real, enforced limits — plus a
+best-effort per-IP limit held IN MEMORY ONLY (never persisted, reset on deploy;
+best-effort only on serverless). We do not store IP addresses. The limit must allow a
+full offline queue to flush (>= 60 appends/min); on 429 the client backs off
+exponentially and respects Retry-After. Over-limit -> 413/429 with a calm message.
+On hitting the snapshot cap: block new snapshots with a clear message. Never drop
+silently.
+
+BACKEND TESTS (record pass/fail):
+T8  Create -> append -> reload -> read back: versions in seq order with server timestamps
+T9  Simulate timeout after the server stored a snapshot; retry same snapshotId ->
+    exactly one row; client gets the stored seq
+T9b Fire TWO append requests with the SAME snapshotId at the same instant -> exactly one
+    row; BOTH responses return the SAME seq; docs.last_seq equals that seq, NOT seq+1
+T10 Two tabs write near-simultaneously (different snapshotIds, API level) -> both stored;
+    seq gap-free. (The D6 UI guard prevents the second tab from initiating writes.)
+T11 Append with wrong key (curl, not the UI) -> 403, nothing stored; no key -> 401
+T12 Snapshot over 32 KB -> 413, clear message, nothing partially stored
+
+SERVER-SIDE ENFORCEMENT CHECKLIST (a client-side check is not security):
+1. EVERY document operation (read, append, declare, share, revoke, delete) is scoped to
+   its document AND its authorization rule. Deliverable: a route x auth table in the
+   code review. (Export is client-side — see API contract.)
+2. Wrong/missing keys are rejected by the server (T11 via curl), never merely hidden.
+3. Request payloads validated server-side (types, lengths, eventType whitelist) (T12).
+4. Server errors and logs NEVER contain the write key, document text, or URLs carrying
+   share tokens. Request headers are never logged. T15 verifies by triggering a write
+   error and inspecting logs.
+5. RLS blocks anonymous raw table reads (T16).
+6. The server secret is the DATABASE CONNECTION STRING (session pooler), which grants
+   table-owner access — MORE powerful than any API key. It lives only in server env:
+   never in client code, never in the repo, never in a screenshot. If it ever touches a
+   chat, screenshot or repo, RESET THE DATABASE PASSWORD.
+7. Share tokens stored hashed, revocable, separate from the write key.
+8. The "What we record" note (below, verbatim) tells the truth about what exists.
+9. The write key is accepted ONLY from the Authorization header — never from a query
+   string, body, or cookie.
+
+OFFLINE:
+- REQUIRED: with the network off, editing, capture and replay continue. Unsent snapshots
+  queue in order (snapshotId preserved) in IndexedDB; on reconnect they sync exactly
+  once, in order (T13). UI shows Pending/Synced.
+- STRETCH (only if tested): offline reload via service worker.
+- Replay reads the LOCAL STORE first; the server is a sync overlay. Replay must work
+  with no network.
+- T13: devtools offline -> 3 snapshots -> reconnect -> each stored exactly once, in
+  order, seq gap-free; duplicate sends prove idempotent.
+
+EXPORT / IMPORT (honesty labels, no cryptography):
+- Export is CLIENT-SIDE, built from the local cache. There is no server export route.
+- Export allow-list ONLY: title, version, export time, snapshots (seq, t, eventType,
+  inserted, deleted, countSource, text), declaration, captureSpanMs, captureStartMs,
+  captureEndMs (three integers computed at export time from clientT). NOTHING else.
+  Raw clientT is NEVER exported. (T14: grep the file for the key string — absent.)
+- IMPORT — SPAN FIELDS: captureSpanMs, captureStartMs, captureEndMs are OPTIONAL in the
+  import schema; a bundle without them imports fine. If captureStartMs and captureEndMs
+  are both present, RECOMPUTE the span from them (never trust the stored value);
+  validate endMs >= startMs; if not, drop the span and show "No time span in this
+  bundle." An imported span is an UNTRUSTED claim from the file, shown under the
+  persistent "not independently verified" label — never presented as a measurement
+  DraftReplay made.
+- Import guard: validate JSON schema; enforce file/text size limits; NEVER auto-trust
+  imported content. Schema-violating bundle -> rejected with a clear message (T17).
+- Every imported replay displays, persistently, above the replay:
+  "Imported replay — history not independently verified."
+- Never describe bundles as tamper-proof, signed, or verified evidence.
+
+SCREENS (build in this order):
+1. WRITE — large text area (>=60% viewport), title field, live ticker in monospace:
+   "Snapshot #N saved · P pastes · D deletions". On paste, a neutral amber toast flashes
+   "Pasted as a block" (the only toast; it judges nothing).
+   Buttons: "Finish & Declare", "Open Replay". A "Try it yourself" card (3 one-line
+   steps) on first visit.
+2. BACKEND ROUND-TRIP — create, append, read back with write-key auth (T8-T12, T9b).
+   CHECKPOINT 13:00 — if this fails, stop and tell the team immediately.
+3. REPLAY — slider (first -> latest) + Play (one snapshot per 350 ms). Text GROWS as you
+   scrub. Event cards (the exact words judges will read):
+   - "paste" -> amber glow + "Pasted as a block"
+   - "large_delete" AND inserted > 0 -> "Replaced approx. {deleted} characters with {inserted}"
+   - "large_delete" AND inserted = 0 -> "Removed approx. {deleted} characters"
+   - "undo" -> "Undo"
+   - "pause" -> text appears, no card
+   Time strip below the slider: one bar per snapshot; BAR HEIGHT COMPUTED AT RENDER TIME
+   from the diff between consecutive snapshot texts (never from stored inserted fields);
+   paste = amber tick, large_delete = red tick.
+   On-screen note (always visible): "Shows saved states, not every keystroke."
+   Data: metadata for ALL snapshots up front (small); snapshot TEXT loads in chunks of 50,
+   oldest first, PREFETCHED before the scrubber reaches them. Replay reads the local
+   store first.
+4. DECLARE — "Did you use AI help while writing this? This is not a test — honest
+   answers are the point." Radios: "No AI help" / "AI for ideas only (brainstorm,
+   structure)" / "AI helped draft some text" / "AI wrote parts of this". Optional note
+   (<=140 chars). Label under the box: "Your self-declaration — not proof of how this
+   was written." Saved with the document; later edits create version 2.
+5. WHAT WE RECORD — display the following note VERBATIM. Do not rewrite, reword, shrink
+   or regenerate it. Length rule: <= 150 words, excluding the title. The span feature
+   adds NO sentence to this note (storage truth lives here; display truth lives in the
+   span caveat). Copy-audit acceptance: every sentence must match what the code stores.
+
+   --- BEGIN NOTE (copy exactly) ---
+   Title: "What DraftReplay records and why"
+
+   We record snapshots — the full document at moments of change — never keystrokes: we
+   show effort, not surveillance. Paste lengths come from the clipboard and are exact;
+   other counts are estimates. We keep no separate record of deleted text; earlier
+   snapshots still show what the document said before. No names, no accounts. A document
+   carries a random ID — not anonymity: the text can identify its author. Versions are
+   stored on our server under that ID. Anyone with the write key can add versions; losing
+   it stops server writes — no recovery — clearing this device's site data removes
+   the local copy. The key holder can delete the document and its versions; nothing is
+   deleted automatically. A reviewer sees a replay only when you share it; imported
+   replays are labelled "not independently verified". Your declaration is self-reported.
+   The rate limiter reads your IP in memory only — never saved.
+   --- END NOTE ---
+
+   Linked from every screen ("?" in the header).
+6. REVIEWER REPLAY — open a share link (revocable token) or import a JSON bundle. Show:
+   the replay, the declaration card BESIDE it (equal size), and a two-column card
+   "What this shows / What this cannot tell you"
+   Shows: how the text arrived over time; where blocks were pasted; what the student
+   declared. Cannot tell: who actually typed; whether a paste was a quotation; intent;
+   how long you actually spent — only the span between the first and last saved state is
+   visible, and it comes from the student's own device clock.
+   Imported bundles get the persistent "not independently verified" label.
+
+TIME SPAN DISPLAY (derived display — an indicator, NOT evidence; build AFTER all core
+screens; polish only):
+- Span = clientT(last snapshot) - clientT(first snapshot).
+  - Student's own screens: computed in the BROWSER from local clientT.
+  - Reviewer screen: GET /api/docs/:id/meta returns captureSpanMs, captureStartMs,
+    captureEndMs (derived SERVER-side from stored clientT). The reviewer screen never
+    receives raw clientT.
+  - NEVER compute from server t: offline snapshots all get the same server t at
+    reconnect, so a server-t span would collapse to ~0.
+- Display on REPLAY and REVIEWER ONLY (never WRITE — no stopwatch optics), two lines:
+    Line 1: "Saved states span 2 h 00 m (12 saves)"
+    Line 2: "First save 11:00 AM · Last save 1:00 PM"
+  - Labels are "First save" / "Last save" — NOT "Started" / "Finished": the first save
+    fires 2 s after the first input, not when the document was opened.
+  - Times formatted in the VIEWER's local timezone, 12-hour with AM/PM. Do not store or
+    export a timezone.
+  - If the first/last save date differs from today, show the date beside the time
+    (e.g. "First save 31 Oct, 11:00 AM"). Never show an ambiguous time.
+  - One saved state: show "1 saved state — no span yet". Zero: "No saved states yet".
+- Caveat, ALWAYS visible directly below the two lines (never a tooltip):
+  "Measured from saved states on the student's device clock, not from activity. Time
+  away, thinking, and reading a reference all look the same. This is an indicator,
+  not proof."
+- NEUTRAL LANGUAGE ONLY. No colour, no rating, no gap list, no largest-gap metric, no
+  comparison between students, no "you only wrote 4 minutes" framing. (Rule 4.)
+- Honest window rule: the span covers first-save to last-save. Within that window it
+  counts every gap as time (so it is generous); the first stretch of typing before the
+  first save falls outside it. The clock is the student's own device clock and cannot
+  be verified — so the generosity holds only if the clock is honest. Never present the
+  span as a measure of productivity.
+- No numbered test (trivially derived); eyeball beside T19.
+
+SEEDED DEMO (?demo=1) — "FICTIONAL DEMO DOCUMENT" labels on both. Both docs are
+READ-ONLY (the editor is DISABLED for seeded docs; live typing in the demo always
+happens on a fresh empty document — this protects the span story from live keystrokes).
+TIME STORY (this is the part seeds get wrong):
+- Both docs' clientT values are computed when ?demo=1 first generates them and are
+  ALWAYS ANCHORED TO THE PAST: last save = generation time minus 8 minutes; first save
+  = last save minus ~52 minutes. Clock times on the reviewer screen therefore always
+  precede "now" — never future timestamps, whatever hour the pitch happens. NEVER seed
+  uniform intervals.
+- On demo morning, clear the demo cache (or regenerate seeds fresh) so the clock times
+  are from demo morning — not build day.
+- Hero doc "My Favourite Festival (Class 8 English)" (~12 saves, span 45-60 min):
+  typing bursts 30-90 s apart during active stretches; TWO visibly longer gaps (one
+  8-12 min before the rewrite, one ~25 min mid-essay break); polish edits near the end.
+  Story beats: title + first sentence -> bursts -> 2-sentence pasted Diwali block (with
+  an attribution inside the text) -> more typing -> ~300-char paragraph removed and
+  rewritten -> polish -> declaration "AI for ideas only — used AI to brainstorm a list
+  of festivals".
+- "History Essay (fictional)": four pasted blocks; declaration "AI wrote parts of this";
+  its own distinct ~20-minute time story so the two validation docs differ in time
+  pattern as well as paste pattern.
+- Eyeball check beside T19: the span line reads 45-60 min, the timeline shows at least
+  two visibly long gaps, and every clock time is in the past.
+
+MASTER ACCEPTANCE TESTS (record pass/fail — a failing test is DISCLOSED, never claimed):
+T14 Export hygiene: export a bundle -> grep for the key string and for raw clientT ->
+    both absent; captureSpanMs/captureStartMs/captureEndMs present
+T15 Log hygiene: trigger a write error -> inspect server logs -> key, text and token
+    URLs absent
+T16 RLS: anonymous raw table read (Supabase REST) -> blocked on every table
+T17 Import guard: schema-violating JSON -> rejected clearly; our own exported bundle ->
+    imports cleanly (span fields optional); a bundle missing span fields -> imports with
+    "No time span in this bundle"; a valid-but-edited bundle -> imports WITH the "not
+    independently verified" label visible
+T18 Declaration: save -> stored with the doc -> shown beside the replay -> version +1
+T19 Replay honesty: "Shows saved states, not every keystroke" visible while scrubbing
+    (plus the span eyeball check above)
+T20 Key lifecycle: create doc -> refresh -> append succeeds from the IndexedDB key
+T21a Delete ONLY the key record from IndexedDB -> append fails with a clear, calm
+     message; local export-from-cache still works
+T21b Clear ALL site data -> app opens to a calm "This device no longer holds the write
+     key; server versions can't be recovered" state, no crash; a previously downloaded
+     bundle still opens in the import viewer
+
+OUT OF SCOPE (do not build): hash chains or signatures · accounts/login · AI or
+plagiarism detection of any kind · keystroke capture · screen capture of any kind
+(getDisplayMedia) — NEVER · photo attachments — not in this build · multi-user editing ·
+comments or grading · student directory/feed · automatic deletion (stated as a limit) ·
+server export route (export is client-side).
+
+QUALITY BAR: a judge understands the tool in 30 seconds. No console errors. Editing,
+capture and replay work with no network after the app is loaded.
